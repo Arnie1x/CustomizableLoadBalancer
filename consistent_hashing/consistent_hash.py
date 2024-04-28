@@ -1,5 +1,3 @@
-import math
-
 class ConsistentHashMap:
     def __init__(self, num_servers=3, num_slots=512, num_virtual_servers=9):
         self.num_servers = num_servers
