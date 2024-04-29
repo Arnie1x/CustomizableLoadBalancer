@@ -76,7 +76,7 @@ def add_servers():
     for _ in range(n):
         server_id = len(load_balancer.servers) + 1
         hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-        container = client.containers.run("server:latest", name=hostname, detach=True, network="app-net", network_alias=hostname, environment={"SERVER_ID": str(server_id)})
+        container = client.containers.run("web-server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id)})
         load_balancer.add_server(server_id)
 
     replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
@@ -142,4 +142,4 @@ def route_request(path):
         }), 400
         
 if __name__ == '__main__':
-    app.run(port=6000)
+    app.run(port=5000)
