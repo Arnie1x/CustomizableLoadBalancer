@@ -3,6 +3,7 @@ import random
 import string
 import docker
 from flask import Flask, request, jsonify
+import requests
 # from consistent_hashing.consistent_hash import ConsistentHashMap
 
 class ConsistentHashMap:
@@ -32,7 +33,19 @@ class ConsistentHashMap:
 
     def get_server(self, request_id):
         slot = self._hash(request_id)
-        virtual_servers = self.hash_map[slot]
+        
+        virtual_servers = None
+        for x in self.hash_map[slot:]:
+            if len(x) != 0:
+                virtual_servers = x
+                break
+        if virtual_servers is None:
+            for x in self.hash_map:
+                if len(x) != 0:
+                    virtual_servers = x
+                    break
+        # virtual_servers = next((x for x in self.hash_map[slot:].copy() if x != []), (x for x in self.hash_map.copy() if x != []))
+        # print(self.hash_map)
         if not virtual_servers:
             return None
         return self.virtual_servers[virtual_servers[0]]
@@ -49,6 +62,7 @@ class ConsistentHashMap:
 app = Flask(__name__)
 client = docker.from_env()
 load_balancer = ConsistentHashMap(num_servers=3, num_slots=512, num_virtual_servers=9)
+api_client = docker.APIClient(base_url='unix://var/run/docker.sock')
 
 @app.route('/rep', methods=['GET'])
 def get_replicas():
@@ -76,7 +90,7 @@ def add_servers():
     for _ in range(n):
         server_id = len(load_balancer.servers) + 1
         hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-        container = client.containers.run("web-server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id)})
+        container = client.containers.run("web_server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id)})
         load_balancer.add_server(server_id)
 
     replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
@@ -120,9 +134,31 @@ def remove_servers():
         "status": "successful"
     }), 200
     
+# @app.route('/<path>', methods=['GET'])
+# def route_request(path):
+#     # request_id = hash(request.headers.get('Request-Id', ''))
+#     request_id = random.randint(100000, 999999)
+#     server_id = load_balancer.get_server(request_id)
+#     if server_id is None:
+#         return jsonify({
+#             "message": "No servers available",
+#             "status": "failure"
+#         }), 500
+
+#     server_name = f"server_{server_id}"
+#     container = client.containers.get(server_name)
+#     try:
+#         resp = container.execute(f"/app/server.py {path}")
+#         return resp.output.decode(), resp.exit_code
+#     except docker.errors.ContainerError as e:
+#         return jsonify({
+#             "message": f"<Error> '{path}' endpoint does not exist in server replicas",
+#             "status": "failure"
+#         }), 400
+
 @app.route('/<path>', methods=['GET'])
 def route_request(path):
-    request_id = hash(request.headers.get('Request-Id', ''))
+    request_id = request_id = random.randint(100000, 999999)
     server_id = load_balancer.get_server(request_id)
     if server_id is None:
         return jsonify({
@@ -132,14 +168,16 @@ def route_request(path):
 
     server_name = f"server_{server_id}"
     container = client.containers.get(server_name)
+    container_ip = api_client.inspect_container(container.name)['NetworkSettings']['IPAddress']
+
     try:
-        resp = container.execute(f"/app/server.py {path}")
-        return resp.output.decode(), resp.exit_code
-    except docker.errors.ContainerError as e:
+        resp = requests.get(f"http://{container_ip}:5000/{path}", headers=request.headers)
+        return resp.content, resp.status_code
+    except requests.exceptions.RequestException as e:
         return jsonify({
             "message": f"<Error> '{path}' endpoint does not exist in server replicas",
             "status": "failure"
         }), 400
-        
+
 if __name__ == '__main__':
     app.run(port=5000)
