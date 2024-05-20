@@ -64,7 +64,7 @@ client = docker.from_env()
 load_balancer = ConsistentHashMap(num_servers=3, num_slots=512, num_virtual_servers=9)
 api_client = docker.APIClient(base_url='unix://var/run/docker.sock')
 
-ip_addresses = []
+ports = []
 
 @app.route('/rep', methods=['GET'])
 def get_replicas():
@@ -79,17 +79,16 @@ def get_replicas():
     
 @app.route('/add', methods=['POST'])
 def add_servers():
-    global ip_addresses
-    def create_ip():
-        rand = random.randint(2, 200)
-        ip = f'127.0.0.{rand}'
+    global ports
+    def create_port():
+        port = random.randint(5001, 6000)
         try:
-            _ = ip_addresses.index(ip)
-            ip = create_ip()
+            _ = ports.index(port)
+            port = create_port()
         except:
-            ip_addresses.append(ip)
+            ports.append(port)
         
-        return ip
+        return port
     
     payload = request.get_json()
     n = payload.get('n', 0)
@@ -104,10 +103,10 @@ def add_servers():
     # Create Randomized IP Address and assign it to the container
 
     for _ in range(n):
-        ip_address = create_ip()
+        port = create_port()
         server_id = len(load_balancer.servers) + 1
         hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-        container = client.containers.run("web_server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id), "IP_ADDRESS":ip_address})
+        container = client.containers.run("web_server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id), "PORT":port})
         load_balancer.add_server(server_id)
 
     replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
