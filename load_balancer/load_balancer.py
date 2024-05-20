@@ -64,6 +64,8 @@ client = docker.from_env()
 load_balancer = ConsistentHashMap(num_servers=3, num_slots=512, num_virtual_servers=9)
 api_client = docker.APIClient(base_url='unix://var/run/docker.sock')
 
+ip_addresses = []
+
 @app.route('/rep', methods=['GET'])
 def get_replicas():
     replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
@@ -77,6 +79,18 @@ def get_replicas():
     
 @app.route('/add', methods=['POST'])
 def add_servers():
+    global ip_addresses
+    def create_ip():
+        rand = random.randint(2, 200)
+        ip = f'127.0.0.{rand}'
+        try:
+            _ = ip_addresses.index(ip)
+            ip = create_ip()
+        except:
+            ip_addresses.append(ip)
+        
+        return ip
+    
     payload = request.get_json()
     n = payload.get('n', 0)
     hostnames = payload.get('hostnames', [])
@@ -86,11 +100,14 @@ def add_servers():
             "message": "<Error> Length of hostname list is more than newly added instances",
             "status": "failure"
         }), 400
+        
+    # Create Randomized IP Address and assign it to the container
 
     for _ in range(n):
+        ip_address = create_ip()
         server_id = len(load_balancer.servers) + 1
         hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-        container = client.containers.run("web_server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id)})
+        container = client.containers.run("web_server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id), "IP_ADDRESS":ip_address})
         load_balancer.add_server(server_id)
 
     replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
@@ -133,28 +150,6 @@ def remove_servers():
         },
         "status": "successful"
     }), 200
-    
-# @app.route('/<path>', methods=['GET'])
-# def route_request(path):
-#     # request_id = hash(request.headers.get('Request-Id', ''))
-#     request_id = random.randint(100000, 999999)
-#     server_id = load_balancer.get_server(request_id)
-#     if server_id is None:
-#         return jsonify({
-#             "message": "No servers available",
-#             "status": "failure"
-#         }), 500
-
-#     server_name = f"server_{server_id}"
-#     container = client.containers.get(server_name)
-#     try:
-#         resp = container.execute(f"/app/server.py {path}")
-#         return resp.output.decode(), resp.exit_code
-#     except docker.errors.ContainerError as e:
-#         return jsonify({
-#             "message": f"<Error> '{path}' endpoint does not exist in server replicas",
-#             "status": "failure"
-#         }), 400
 
 @app.route('/<path>', methods=['GET'])
 def route_request(path):
