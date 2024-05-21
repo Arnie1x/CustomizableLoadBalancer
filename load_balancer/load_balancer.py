@@ -152,7 +152,7 @@ def remove_servers():
 
 @app.route('/<path>', methods=['GET'])
 def route_request(path):
-    request_id = request_id = random.randint(100000, 999999)
+    request_id = random.randint(100000, 999999)
     server_id = load_balancer.get_server(request_id)
     if server_id is None:
         return jsonify({
@@ -174,4 +174,4 @@ def route_request(path):
         }), 400
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    app.run(host='0.0.0.0', port=5000)

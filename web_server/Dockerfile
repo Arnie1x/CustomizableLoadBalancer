@@ -30,6 +30,8 @@ RUN adduser \
     --uid "${UID}" \
     appuser
 
+RUN apt-get update && apt-get install -y curl
+
 # Download dependencies as a separate step to take advantage of Docker's caching.
 # Leverage a cache mount to /root/.cache/pip to speed up subsequent builds.
 # Leverage a bind mount to requirements.txt to avoid having to copy them into
@@ -45,7 +47,8 @@ USER appuser
 COPY . .
 
 # Expose the port that the application listens on.
-EXPOSE 5000-6000
+EXPOSE 5000-5100
 
 # Run the application.
 CMD python3 server.py
+# CMD ["flask", "run", "--host", "0.0.0.0"]
