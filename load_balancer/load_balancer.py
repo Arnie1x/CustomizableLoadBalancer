@@ -80,8 +80,8 @@ def get_replicas():
 @app.route('/add', methods=['POST'])
 def add_servers():
     global ports
-    def create_port():
-        port = random.randint(5001, 6000)
+    def create_port() -> int:
+        port = random.randint(5001, 5100)
         try:
             _ = ports.index(port)
             port = create_port()
@@ -106,7 +106,7 @@ def add_servers():
         port = create_port()
         server_id = len(load_balancer.servers) + 1
         hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-        container = client.containers.run("web_server-server", name=hostname, detach=True, environment={"SERVER_ID": str(server_id), "PORT":port})
+        container = client.containers.run("web_server-server", name=hostname, ports={port: port}, detach=True, environment={"SERVER_ID": str(server_id), "PORT":port})
         load_balancer.add_server(server_id)
 
     replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
@@ -163,9 +163,12 @@ def route_request(path):
     server_name = f"server_{server_id}"
     container = client.containers.get(server_name)
     container_ip = api_client.inspect_container(container.name)['NetworkSettings']['IPAddress']
+    
+    ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
+    port = [int(i['HostPort']) for i in ports][0]
 
     try:
-        resp = requests.get(f"http://{container_ip}:5000/{path}", headers=request.headers)
+        resp = requests.get(f"http://127.0.0.1:{port}/{path}", headers=request.headers)
         return resp.content, resp.status_code
     except requests.exceptions.RequestException as e:
         return jsonify({
