@@ -5,6 +5,9 @@ import time
 import docker
 from flask import Flask, request, jsonify
 import requests
+import threading
+from requests.exceptions import RequestException
+
 # from consistent_hashing.consistent_hash import ConsistentHashMap
 
 class ConsistentHashMap:
@@ -182,11 +185,43 @@ class LoadBalancer:
                 "status": "failure"
             }), 400
 
+def spawn_servers(count=3):
+    time.sleep(10)
+    hostnames = [f"server_{n+1}" for n in range(count)]
+    payload = {"n": count, "hostnames": hostnames}
+    resp = requests.post("http://127.0.0.1:5000/add", json=payload)
+    print(resp)
+
+def check_server_health(server_id):
+    server_name = f"server_{server_id}"
+    container = client.containers.get(server_name)
+    ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
+    port = [int(i['HostPort']) for i in ports][0]
+    
+    try:
+        resp = requests.get(f"http://127.0.0.1:{port}/heartbeat", timeout=5)
+        if resp.status_code == 200:
+            return True
+        else:
+            return False
+    except RequestException:
+        return False
+        
+def monitor_servers():
+    while True:
+        for server_id in load_balancer.servers.keys():
+            if not check_server_health(server_id):
+                print(f"Server {server_id} is down. Spawning a new container...")
+                payload = {"n": 1, "hostnames": [f"server_{server_id}"]}
+                resp = requests.post("http://127.0.0.1:5000/add", json=payload)
+        time.sleep(10)  # Check server health every 10 seconds
+        
 if __name__ == '__main__':
     balancer = LoadBalancer()
+    
+    server_start_thread = threading.Thread(target=spawn_servers)
+    server_start_thread.start()
+    
     balancer.app.run(host='0.0.0.0', port=5000)
-    # time.sleep(5)
-    # payload = {"n": 3, "hostnames": [f"server_{n}" for n in range(3)]}
-    # resp = requests.post("http://127.0.0.1:5000/add", json=payload)
-    # print(resp)
+    
 
