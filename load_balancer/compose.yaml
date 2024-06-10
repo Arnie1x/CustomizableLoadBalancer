@@ -9,17 +9,14 @@
 # https://github.com/docker/awesome-compose
 services:
   load_balancer:
-    build: ./load_balancer
-    ports:
-      - "5000:5000"
+    build:
+      context: .
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "5000:5000"
     privileged: true
-    networks:
-      - app-net
-
-  server:
-    build: ../web_server
+    container_name: load_balancer
     networks:
       - app-net
 
