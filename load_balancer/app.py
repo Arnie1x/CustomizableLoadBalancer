@@ -1,227 +1,162 @@
-import os
+import hashlib
 import random
-import string
+import threading
 import time
 import docker
 from flask import Flask, request, jsonify
 import requests
-import threading
-from requests.exceptions import RequestException
 
-# from consistent_hashing.consistent_hash import ConsistentHashMap
+# Constants from the assignment
+NUM_SERVERS = 3
+NUM_SLOTS = 512
+NUM_VIRTUAL_SERVERS = 9
+SERVER_HASH_FUNCTION = lambda i: i + 2*i**2 + 17
+VIRTUAL_SERVER_HASH_FUNCTION = lambda i, j: i + j + 2*j**2 + 25
 
+# Consistent Hash Map implementation
 class ConsistentHashMap:
-    def __init__(self, num_servers=3, num_slots=512, num_virtual_servers=9):
-        self.num_servers = num_servers
-        self.num_slots = num_slots
-        self.num_virtual_servers = num_virtual_servers
-        self.hash_map = [[] for _ in range(num_slots)]
+    def __init__(self):
+        self.hash_ring = [None] * NUM_SLOTS
         self.servers = {}
-        self.virtual_servers = {}
 
-    def add_server(self, server_id):
-        for i in range(self.num_virtual_servers):
-            virtual_server_id = (server_id, i)
-            slot = self._hash(server_id, i)
-            self.hash_map[slot].append(virtual_server_id)
-            self.virtual_servers[virtual_server_id] = server_id
-        self.servers[server_id] = True
+    def add_server(self, server_id, num_virtual_servers):
+        self.servers[server_id] = []
+        for i in range(num_virtual_servers):
+            slot = self.hash_function(server_id, i) % NUM_SLOTS
+            while self.hash_ring[slot] is not None:
+                slot = (slot + 1) % NUM_SLOTS
+            self.hash_ring[slot] = server_id
+            self.servers[server_id].append(slot)
 
     def remove_server(self, server_id):
-        for i in range(self.num_virtual_servers):
-            virtual_server_id = (server_id, i)
-            slot = self._hash(server_id, i)
-            self.hash_map[slot].remove(virtual_server_id)
-            del self.virtual_servers[virtual_server_id]
+        for slot in self.servers[server_id]:
+            self.hash_ring[slot] = None
         del self.servers[server_id]
 
     def get_server(self, request_id):
-        slot = self._hash(request_id)
-        
-        virtual_servers = None
-        for x in self.hash_map[slot:]:
-            if len(x) != 0:
-                virtual_servers = x
-                break
-        if virtual_servers is None:
-            for x in self.hash_map:
-                if len(x) != 0:
-                    virtual_servers = x
-                    break
-        # virtual_servers = next((x for x in self.hash_map[slot:].copy() if x != []), (x for x in self.hash_map.copy() if x != []))
-        # print(self.hash_map)
-        if not virtual_servers:
-            return None
-        return self.virtual_servers[virtual_servers[0]]
+        slot = self.hash_function(request_id) % NUM_SLOTS
+        while self.hash_ring[slot] is None:
+            slot = (slot + 1) % NUM_SLOTS
+        return self.hash_ring[slot]
 
-    def _hash(self, value, seed=0):
-        hash_fn = lambda x, y: (x ** 2 + 2 * x + seed * y) % self.num_slots
-        if isinstance(value, int):
-            return hash_fn(value, 17)
-        elif isinstance(value, tuple):
-            server_id, virtual_id = value
-            return hash_fn(server_id, virtual_id + 25)
-  
-class LoadBalancer:
-    app = Flask(__name__)
+    def hash_function(self, *args):
+        key = ''.join(str(arg) for arg in args).encode()
+        return int(hashlib.sha256(key).hexdigest(), 16)
+
+# Load Balancer implementation
+app = Flask(__name__)
+client = docker.from_env()
+api_client = docker.APIClient(base_url='unix://var/run/docker.sock')
+ports = []
+
+@app.route('/rep', methods=['GET'])
+def get_replicas():
+    replicas = list(consistent_hash_map.servers.keys())
+    return jsonify({"message": {"N": len(replicas), "replicas": replicas}, "status": "successful"})
+
+@app.route('/add', methods=['POST'])
+def add_replicas():
+    data = request.get_json()
+    new_replicas = data.get('hostnames', [])
+    num_new_replicas = data.get('n', 0)
+    if len(new_replicas) > num_new_replicas:
+        return jsonify({"message": "<Error> Length of hostname list is more than newly added instances", "status": "failure"}), 400
+    for i in range(num_new_replicas):
+        if i < len(new_replicas):
+            replica_id = new_replicas[i]
+        else:
+            replica_id = f"Server{len(consistent_hash_map.servers)+i+1}"
+        consistent_hash_map.add_server(replica_id, NUM_VIRTUAL_SERVERS)
+        spawn_replica(replica_id)
+    return jsonify({"message": {"N": len(consistent_hash_map.servers), "replicas": list(consistent_hash_map.servers.keys())}, "status": "successful"})
+
+@app.route('/rm', methods=['DELETE'])
+def remove_replicas():
+    data = request.get_json()
+    replicas_to_remove = data.get('hostnames', [])
+    num_replicas_to_remove = data.get('n', 0)
+    if len(replicas_to_remove) > num_replicas_to_remove:
+        return jsonify({"message": "<Error> Length of hostname list is more than removable instances", "status": "failure"}), 400
+    for i in range(num_replicas_to_remove):
+        if i < len(replicas_to_remove):
+            replica_id = replicas_to_remove[i]
+        else:
+            replica_id = random.choice(list(consistent_hash_map.servers.keys()))
+        consistent_hash_map.remove_server(replica_id)
+        remove_replica(replica_id)
+    return jsonify({"message": {"N": len(consistent_hash_map.servers), "replicas": list(consistent_hash_map.servers.keys())}, "status": "successful"})
+
+@app.route('/<path:path>', methods=['GET'])
+def route_request(path):
+    request_id = f"{request.remote_addr}:{request.environ['REMOTE_PORT']}"
+    server_id = consistent_hash_map.get_server(request_id)
     
-    def __init__(self, num_servers=3):
-        global client, load_balancer, api_client, ports
-
-        client = docker.from_env()
-        load_balancer = ConsistentHashMap(num_servers=num_servers, num_slots=512, num_virtual_servers=9)
-        api_client = docker.APIClient(base_url='unix://var/run/docker.sock')
-        ports = []
-
-    @app.route('/rep', methods=['GET'])
-    def get_replicas():
-        global load_balancer
-        replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
-        return jsonify({
-            "message": {
-                "N": len(replicas),
-                "replicas": replicas
-            },
-            "status": "successful"
-        }), 200
-
-    @app.route('/add', methods=['POST'])
-    def add_servers():
-        global ports, client
-        def create_port() -> int:
-            port = random.randint(5001, 5100)
-            try:
-                _ = ports.index(port)
-                port = create_port()
-            except:
-                ports.append(port)
-
-            return port
-
-        payload = request.get_json()
-        n = payload.get('n', 0)
-        hostnames = payload.get('hostnames', [])
-
-        if len(hostnames) > n:
-            return jsonify({
-                "message": "<Error> Length of hostname list is more than newly added instances",
-                "status": "failure"
-            }), 400
-
-        # Create Randomized IP Address and assign it to the container
-
-        for _ in range(n):
-            port = create_port()
-            server_id = len(load_balancer.servers) + 1
-            hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-            container = client.containers.run("web_server-server", name=hostname, ports={port: port}, detach=True, environment={"SERVER_ID": str(server_id), "PORT":port})
-            load_balancer.add_server(server_id)
-
-        replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
-        return jsonify({
-            "message": {
-                "N": len(replicas),
-                "replicas": replicas
-            },
-            "status": "successful"
-        }), 200
-
-    @app.route('/rm', methods=['DELETE'])
-    def remove_servers():
-        payload = request.get_json()
-        n = payload.get('n', 0)
-        hostnames = payload.get('hostnames', [])
-
-        if len(hostnames) > n:
-            return jsonify({
-                "message": "<Error> Length of hostname list is more than removable instances",
-                "status": "failure"
-            }), 400
-
-        for _ in range(n):
-            if not load_balancer.servers:
-                break
-
-            server_id = list(load_balancer.servers.keys())[0]
-            hostname = hostnames.pop(0) if hostnames else f"server_{server_id}"
-            container = client.containers.get(hostname)
-            container.stop()
-            container.remove()
-            load_balancer.remove_server(server_id)
-
-        replicas = [f"server_{server_id}" for server_id in load_balancer.servers.keys()]
-        return jsonify({
-            "message": {
-                "N": len(replicas),
-                "replicas": replicas
-            },
-            "status": "successful"
-        }), 200
-
-    @app.route('/<path>', methods=['GET'])
-    def route_request(path):
-        global api_client
-        request_id = random.randint(100000, 999999)
-        server_id = load_balancer.get_server(request_id)
-        if server_id is None:
-            return jsonify({
-                "message": "No servers available",
-                "status": "failure"
-            }), 500
-
-        server_name = f"server_{server_id}"
-        container = client.containers.get(server_name)
-        # container_ip = api_client.inspect_container(container.name)['NetworkSettings']['IPAddress']
-
-        ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
-        port = [int(i['HostPort']) for i in ports][0]
-
-        try:
-            resp = requests.get(f"http://127.0.0.1:{port}/{path}", headers=request.headers)
-            return resp.content, resp.status_code
-        except requests.exceptions.RequestException as e:
-            return jsonify({
-                "message": f"<Error> '{path}' endpoint does not exist in server replicas",
-                "status": "failure"
-            }), 400
-
-def spawn_servers(count=3):
-    time.sleep(10)
-    hostnames = [f"server_{n+1}" for n in range(count)]
-    payload = {"n": count, "hostnames": hostnames}
-    resp = requests.post("http://127.0.0.1:5000/add", json=payload)
-    print(resp)
-
-def check_server_health(server_id):
-    server_name = f"server_{server_id}"
-    container = client.containers.get(server_name)
+    container = client.containers.get(server_id)
     ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
     port = [int(i['HostPort']) for i in ports][0]
-    
     try:
-        resp = requests.get(f"http://127.0.0.1:{port}/heartbeat", timeout=5)
-        if resp.status_code == 200:
-            return True
-        else:
-            return False
-    except RequestException:
-        return False
-        
-def monitor_servers():
-    while True:
-        for server_id in load_balancer.servers.keys():
-            if not check_server_health(server_id):
-                print(f"Server {server_id} is down. Spawning a new container...")
-                payload = {"n": 1, "hostnames": [f"server_{server_id}"]}
-                resp = requests.post("http://127.0.0.1:5000/add", json=payload)
-        time.sleep(10)  # Check server health every 10 seconds
-        
-if __name__ == '__main__':
-    balancer = LoadBalancer()
-    
-    server_start_thread = threading.Thread(target=spawn_servers)
-    server_start_thread.start()
-    
-    balancer.app.run(host='0.0.0.0', port=5000)
-    
+        resp = requests.get(f"http://127.0.0.1:{port}/{path}", headers=request.headers)
+        return resp.content, resp.status_code
+    except requests.exceptions.RequestException as e:
+        return jsonify({
+            "message": f"<Error> '{path}' endpoint does not exist in server replicas",
+            "status": "failure",
+            "error": str(e)
+        }), 400
 
+def spawn_replica(replica_id):
+  global ports
+  def create_port() -> int:
+    port = random.randint(5001, 5100)
+    try:
+        _ = ports.index(port)
+        port = create_port()
+    except:
+        ports.append(port)
+    return port
+  
+  port = create_port()
+  container = client.containers.run("load_balancer-server", name=replica_id, ports={port: port}, detach=True, environment={"SERVER_ID": str(replica_id), "PORT":port})
+
+def remove_replica(replica_id):
+    container = client.containers.get(replica_id)
+    container.stop()
+    container.remove(force=True)
+
+def spawn_servers():
+  time.sleep(10)
+  hostnames = [f"server_{n+1}" for n in range(NUM_SERVERS)]
+  payload = {"n": NUM_SERVERS, "hostnames": hostnames}
+  resp = requests.post("http://127.0.0.1:5000/add", json=payload)
+  print(resp)
+  
+# def check_server_health(server_id):
+#     server_name = f"server_{server_id}"
+#     container = client.containers.get(server_name)
+#     ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
+#     port = [int(i['HostPort']) for i in ports][0]
+    
+#     try:
+#         resp = requests.get(f"http://127.0.0.1:{port}/heartbeat", timeout=5)
+#         if resp.status_code == 200:
+#             return True
+#         else:
+#             return False
+#     except RequestException:
+#         return False
+        
+# def monitor_servers():
+#     while True:
+#         for server_id in load_balancer.servers.keys():
+#             if not check_server_health(server_id):
+#                 print(f"Server {server_id} is down. Spawning a new container...")
+#                 payload = {"n": 1, "hostnames": [f"server_{server_id}"]}
+#                 resp = requests.post("http://127.0.0.1:5000/add", json=payload)
+#         time.sleep(10)  # Check server health every 10 seconds
+
+if __name__ == '__main__':
+  server_start_thread = threading.Thread(target=spawn_servers)
+  server_start_thread.start()
+  
+  consistent_hash_map = ConsistentHashMap()
+  app.run(host='0.0.0.0', port=5000)

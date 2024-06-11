@@ -1,40 +1,36 @@
-class ConsistentHashMap:
-    def __init__(self, num_servers=3, num_slots=512, num_virtual_servers=9):
-        self.num_servers = num_servers
-        self.num_slots = num_slots
-        self.num_virtual_servers = num_virtual_servers
-        self.hash_map = [[] for _ in range(num_slots)]
-        self.servers = {}
-        self.virtual_servers = {}
+import hashlib
 
-    def add_server(self, server_id):
-        for i in range(self.num_virtual_servers):
-            virtual_server_id = (server_id, i)
-            slot = self._hash(server_id, i)
-            self.hash_map[slot].append(virtual_server_id)
-            self.virtual_servers[virtual_server_id] = server_id
-        self.servers[server_id] = True
+NUM_SERVERS = 3
+NUM_SLOTS = 512
+NUM_VIRTUAL_SERVERS = 9
+SERVER_HASH_FUNCTION = lambda i: i + 2*i**2 + 17
+VIRTUAL_SERVER_HASH_FUNCTION = lambda i, j: i + j + 2*j**2 + 25
+
+class ConsistentHashMap:
+    def __init__(self):
+        self.hash_ring = [None] * NUM_SLOTS
+        self.servers = {}
+
+    def add_server(self, server_id, num_virtual_servers):
+        self.servers[server_id] = []
+        for i in range(num_virtual_servers):
+            slot = self.hash_function(server_id, i) % NUM_SLOTS
+            while self.hash_ring[slot] is not None:
+                slot = (slot + 1) % NUM_SLOTS
+            self.hash_ring[slot] = server_id
+            self.servers[server_id].append(slot)
 
     def remove_server(self, server_id):
-        for i in range(self.num_virtual_servers):
-            virtual_server_id = (server_id, i)
-            slot = self._hash(server_id, i)
-            self.hash_map[slot].remove(virtual_server_id)
-            del self.virtual_servers[virtual_server_id]
+        for slot in self.servers[server_id]:
+            self.hash_ring[slot] = None
         del self.servers[server_id]
 
     def get_server(self, request_id):
-        slot = self._hash(request_id)
-        virtual_servers = self.hash_map[slot]
-        if not virtual_servers:
-            return None
-        return self.virtual_servers[virtual_servers[0]]
+        slot = self.hash_function(request_id) % NUM_SLOTS
+        while self.hash_ring[slot] is None:
+            slot = (slot + 1) % NUM_SLOTS
+        return self.hash_ring[slot]
 
-    def _hash(self, value, seed=0):
-        hash_fn = lambda x, y: (x ** 2 + 2 * x + seed * y) % self.num_slots
-        if isinstance(value, int):
-            return hash_fn(value, 17)
-        elif isinstance(value, tuple):
-            server_id, virtual_id = value
-            return hash_fn(server_id, virtual_id + 25)
-  
+    def hash_function(self, *args):
+        key = ''.join(str(arg) for arg in args).encode()
+        return int(hashlib.sha256(key).hexdigest(), 16)

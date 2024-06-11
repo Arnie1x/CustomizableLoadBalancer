@@ -8,7 +8,7 @@
 # database or a cache. For examples, see the Awesome Compose repository:
 # https://github.com/docker/awesome-compose
 services:
-  load_balancer:
+  lb:
     build:
       context: .
     volumes:
@@ -17,6 +17,11 @@ services:
       - "5000:5000"
     privileged: true
     container_name: load_balancer
+    networks:
+      - app-net
+      
+  server:
+    build: ../web_server
     networks:
       - app-net
 
