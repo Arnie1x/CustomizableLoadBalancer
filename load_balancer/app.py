@@ -7,7 +7,7 @@ from flask import Flask, request, jsonify
 import requests
 
 # Constants from the assignment
-NUM_SERVERS = 3
+NUM_SERVERS = 6
 NUM_SLOTS = 512
 NUM_VIRTUAL_SERVERS = 9
 SERVER_HASH_FUNCTION = lambda i: i + 2*i**2 + 17
