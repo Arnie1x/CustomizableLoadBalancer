@@ -5,9 +5,10 @@ import time
 import docker
 from flask import Flask, request, jsonify
 import requests
+import json
 
 # Constants from the assignment
-NUM_SERVERS = 6
+NUM_SERVERS = 3
 NUM_SLOTS = 512
 NUM_VIRTUAL_SERVERS = 9
 SERVER_HASH_FUNCTION = lambda i: i + 2*i**2 + 17
@@ -116,7 +117,7 @@ def spawn_replica(replica_id):
     return port
   
   port = create_port()
-  container = client.containers.run("load_balancer-server", name=replica_id, ports={port: port}, detach=True, environment={"SERVER_ID": str(replica_id), "PORT":port})
+  container = client.containers.run("load_balancer-server", name=replica_id, ports={port: port}, detach=True, network='bridge', environment={"SERVER_ID": str(replica_id), "PORT":port})
 
 def remove_replica(replica_id):
     container = client.containers.get(replica_id)
@@ -130,33 +131,58 @@ def spawn_servers():
   resp = requests.post("http://127.0.0.1:5000/add", json=payload)
   print(resp)
   
-# def check_server_health(server_id):
-#     server_name = f"server_{server_id}"
-#     container = client.containers.get(server_name)
-#     ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
-#     port = [int(i['HostPort']) for i in ports][0]
-    
-#     try:
-#         resp = requests.get(f"http://127.0.0.1:{port}/heartbeat", timeout=5)
-#         if resp.status_code == 200:
-#             return True
-#         else:
-#             return False
-#     except RequestException:
-#         return False
-        
+def get_active_servers():
+    resp = requests.get("http://127.0.0.1:5000/rep")
+    data = json.loads(resp.content)
+    replicas = data['message']['replicas']
+    return replicas
+  
+# def check_container_status():
+#     global client
+#     running_containers = client.containers.list()
+#     running_container_ids = [container.id for container in running_containers]
+#     active_servers = get_active_servers()
+#     if len(running_container_ids) < NUM_SERVERS:
+#         for server in active_servers:
+#             if running_container_ids.__contains__(server) == False:
+#                 print(f"Server down: {server} servers running. Spawning new container.")
+#                 spawn_replica(server)
+
 # def monitor_servers():
+#     time.sleep(20)
 #     while True:
-#         for server_id in load_balancer.servers.keys():
-#             if not check_server_health(server_id):
-#                 print(f"Server {server_id} is down. Spawning a new container...")
-#                 payload = {"n": 1, "hostnames": [f"server_{server_id}"]}
-#                 resp = requests.post("http://127.0.0.1:5000/add", json=payload)
-#         time.sleep(10)  # Check server health every 10 seconds
+#         check_container_status()
+#         time.sleep(10)  # Monitor every 10 seconds
+        
+def check_server_health(server_id):
+    try:
+        container = client.containers.get(server_id)
+        ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
+        port = [int(i['HostPort']) for i in ports][0]
+        resp = requests.get(f"http://127.0.0.1:{port}/heartbeat", timeout=5)
+        if resp.status_code == 200:
+            return True
+        else:
+            return False
+    except:
+        return False
+        
+def monitor_servers():
+    time.sleep(30)
+    while True:
+        for server in get_active_servers():
+            if not check_server_health(server):
+                print(f"Server {server} is down. Spawning a new container...")
+                payload = {"n": 1, "hostnames": [f"{server}"]}
+                resp = requests.post("http://127.0.0.1:5000/add", json=payload)
+        time.sleep(10)  # Check server health every 10 seconds
 
 if __name__ == '__main__':
   server_start_thread = threading.Thread(target=spawn_servers)
   server_start_thread.start()
+  
+  monitor_server_thread = threading.Thread(target=monitor_servers)
+  monitor_server_thread.start()  
   
   consistent_hash_map = ConsistentHashMap()
   app.run(host='0.0.0.0', port=5000)
