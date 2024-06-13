@@ -5,19 +5,19 @@ import time
 client = docker.from_env()
 
 # Test /rep endpoint
-resp = requests.get("http://localhost:5000/rep")
+resp = requests.get("http://127.0.0.1:5000/rep")
 print(resp.json())
 time.sleep(3)
 
 # Test /add endpoint
 payload = {"n": 1, "hostnames": ["server_x"]}
-resp = requests.post("http://localhost:5000/add", json=payload)
+resp = requests.post("http://127.0.0.1:5000/add", json=payload)
 print(resp.json())
 time.sleep(3)
 
 # Test /rm endpoint
 payload = {"n": 1, "hostnames": ["server_x"]}
-resp = requests.delete("http://localhost:5000/rm", json=payload)
+resp = requests.delete("http://127.0.0.1:5000/rm", json=payload)
 print(resp.json())
 time.sleep(3)
 

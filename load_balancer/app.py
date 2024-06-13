@@ -93,10 +93,12 @@ def route_request(path):
     server_id = consistent_hash_map.get_server(request_id)
     
     container = client.containers.get(server_id)
+    container_ip = container.attrs["NetworkSettings"]["Networks"]["load_balancer_app-net"]["IPAddress"]
+    print(container_ip)
     ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
     port = [int(i['HostPort']) for i in ports][0]
     try:
-        resp = requests.get(f"http://127.0.0.1:{port}/{path}", headers=request.headers)
+        resp = requests.get(f"http://{container_ip}:{port}/{path}", headers=request.headers)
         return resp.content, resp.status_code
     except requests.exceptions.RequestException as e:
         return jsonify({
@@ -117,7 +119,7 @@ def spawn_replica(replica_id):
     return port
   
   port = create_port()
-  container = client.containers.run("load_balancer-server", name=replica_id, ports={port: port}, detach=True, network='bridge', environment={"SERVER_ID": str(replica_id), "PORT":port})
+  container = client.containers.run("load_balancer-server", name=replica_id, ports={port: port}, detach=True, network='load_balancer_app-net', environment={"SERVER_ID": str(replica_id), "PORT":port})
 
 def remove_replica(replica_id):
     container = client.containers.get(replica_id)
@@ -157,9 +159,10 @@ def get_active_servers():
 def check_server_health(server_id):
     try:
         container = client.containers.get(server_id)
+        container_ip = container.attrs["NetworkSettings"]["Networks"]["load_balancer_app-net"]["IPAddress"]
         ports = [container.ports[i] for i in container.ports if container.ports[i] != None][0]
         port = [int(i['HostPort']) for i in ports][0]
-        resp = requests.get(f"http://127.0.0.1:{port}/heartbeat", timeout=5)
+        resp = requests.get(f"http://{container_ip}:{port}/heartbeat", timeout=5)
         if resp.status_code == 200:
             return True
         else:

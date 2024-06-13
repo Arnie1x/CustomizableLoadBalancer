@@ -11,14 +11,14 @@ services:
   server:
     build:
       context: .
-    networks:
-      - app-net
+    # networks:
+    #   - app-net
     # ports:
     #   - "5001-5100:5001-5100"
 
-networks:
-  app-net:
-    driver: bridge
+# networks:
+#   app-net:
+#     driver: bridge
 
 # The commented out section below is an example of how to define a PostgreSQL
 # database that your application can use. `depends_on` tells Docker Compose to
